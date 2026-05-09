@@ -1,2 +1,2 @@
-# -nepal-ipo-data
+# nepal-ipo-data
 IPO data for app
