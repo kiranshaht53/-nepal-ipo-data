@@ -1,7 +1,6 @@
 """
-Nepal IPO News Scraper v3
-Scrapes sharesansar.com/category/ipo-fpo-news (server-rendered, no JS needed)
-Extracts active IPOs from news headlines using smart pattern matching.
+Nepal IPO News Scraper v4 — STRICT VERSION
+Only includes IPOs with confirmed opening dates from active news.
 """
 
 import json
@@ -36,67 +35,59 @@ def slugify(text):
     return s[:60]
 
 
-def strip_tags(s):
-    s = re.sub(r"<[^>]+>", "", s)
-    s = s.replace("&nbsp;", " ").replace("&amp;", "&")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+# ====== STRICT FILTERING ======
 
-
-# Skip these headlines — they aren't actual active IPOs
-SKIP_PATTERNS = [
-    r"\bagm\b",
-    r"\bappoints\b",
-    r"\boversubscribed\b",
-    r"\bconcludes ipo allotment\b",
-    r"\bissue manager\b",
-    r"\bproposal\b.*\bapproved\b",
-    r"\bpipeline\b",
-    r"\bsebon\b.*\bapproves?\b",
-    r"\bicra\b",
-    r"\bcredit rating\b",
-    r"\bipo result\b",
-    r"\ballotment\b",
-    r"\bextended\b",
-    r"\brefund\b",
-    r"\bclosing today\b.*\boversubscribed\b",
+# Skip these — NOT active IPOs
+SKIP_IF_FOUND = [
+    "agm", "appoints", "oversubscribed",
+    "concludes ipo allotment", "issue manager",
+    "approved", "pipeline", "approves",
+    "icra", "credit rating",
+    "ipo result", "allotment",
+    "extended", "refund", "premium price",
+    "calls agm", "merger", "acquisition",
+    "to issue ipo", "plans ipo",
+    "files ipo", "submits ipo",
 ]
 
-# Match headlines that announce an active/opening IPO
-ACTIVE_PATTERNS = [
+# REQUIRE one of these — confirms the IPO is actively issuing right now
+ACTIVE_REQUIRED = [
     r"ipo for general public",
     r"issue \d+[,\d]* units? ipo shares from",
     r"to issue \d+[,\d]* units? ipo shares from",
-    r"ipo (?:issue|opens?|opening|begins|starts|launches)",
-    r"ipo for (?:foreign nepalese|migrant|qiis)",
-    r"closing (?:today|tomorrow)\b(?!.*oversubscribed)",
-    r"fpo (?:issue|opens?|begins|starts)",
-    r"right shares? (?:issue|opens?|begins)",
-    r"public offering",
+    r"ipo opens?\b",
+    r"ipo opening today",
+    r"closing today",
+    r"closing tomorrow",
+    r"shares from today",
+    r"opens for subscription",
+    r"begins ipo issue",
+    r"starts ipo",
+    r"fpo for general public",
+    r"fpo opens?\b",
+    r"right shares? for general",
+    r"public offering opens",
 ]
 
 
 def looks_like_active_ipo(headline):
-    """Decide if this headline is about an active/opening IPO."""
     h = headline.lower()
-    # Skip known non-actionable types
-    for sp in SKIP_PATTERNS:
-        if re.search(sp, h):
+    # Skip noise first
+    for skip in SKIP_IF_FOUND:
+        if skip in h:
             return False
-    # Match active patterns
-    for ap in ACTIVE_PATTERNS:
-        if re.search(ap, h):
+    # Must match an active pattern
+    for pat in ACTIVE_REQUIRED:
+        if re.search(pat, h):
             return True
     return False
 
 
 def extract_company_name(headline):
-    """Pull the company name out of a headline."""
-    # Remove "IPO for General Public:" prefix etc.
     text = re.sub(r"^ipo for general public:?\s*", "", headline, flags=re.IGNORECASE)
     text = re.sub(r"^ipo for (?:foreign nepalese (?:immigrants|migrant)|qiis):?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^fpo for general public:?\s*", "", text, flags=re.IGNORECASE)
 
-    # Take everything before keywords like "Issue", "to Issue", "Closing", "Opens", etc.
     cuts = [
         r"\s+(?:to issue|issue|issuing|closing|opens?|opening|launches|begins|starts|concludes|today|tomorrow|from)\s",
     ]
@@ -105,26 +96,11 @@ def extract_company_name(headline):
         if m:
             text = text[:m.start()]
             break
-
-    # Clean up trailing punctuation
     text = re.sub(r"[,;:]\s*$", "", text).strip()
     return text
 
 
-def extract_units(headline):
-    """Extract total kitta/units mentioned in headline (e.g., '25,15,455 units')."""
-    m = re.search(r"(\d[\d,]*)\s*units?", headline, re.IGNORECASE)
-    if not m:
-        return None
-    digits = m.group(1).replace(",", "")
-    try:
-        return int(digits)
-    except ValueError:
-        return None
-
-
 def extract_date_from_url(url):
-    """SharSansar news URLs end with -YYYY-MM-DD."""
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})$", url.strip("/"))
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
@@ -132,20 +108,12 @@ def extract_date_from_url(url):
 
 
 def parse_news_page(html):
-    """Find news article links and extract IPO info."""
     if not html:
         return []
 
-    # Each news card has structure:
-    # <a href="/newsdetail/...">...img...</a>
-    # <h4><a href="/newsdetail/..." title="...">Title</a></h4>
-    # ... date text ...
-
-    # Find all newsdetail links with their titles
     pattern = r'<a[^>]+href="(/newsdetail/[^"]+)"[^>]*title="([^"]+)"'
     matches = re.findall(pattern, html, re.IGNORECASE)
 
-    # De-duplicate by URL
     seen = set()
     items = []
     for url, title in matches:
@@ -156,23 +124,30 @@ def parse_news_page(html):
 
     print(f"Found {len(items)} news items on page")
 
+    # ONLY KEEP IPOs from the LAST 30 DAYS — older ones are stale/closed
     today = datetime.now()
-    ninety_days_ago = today - timedelta(days=90)
+    thirty_days_ago = today - timedelta(days=30)
 
     ipos = []
     for url, title in items:
-        # Only consider news from last 90 days
         url_date = extract_date_from_url(url)
-        if url_date:
-            try:
-                d = datetime.strptime(url_date, "%Y-%m-%d")
-                if d < ninety_days_ago:
-                    continue
-            except ValueError:
-                pass
 
-        # Filter: only active IPOs
+        # MUST have a date in the URL
+        if not url_date:
+            print(f"  SKIP (no date): {title[:60]}")
+            continue
+
+        # MUST be recent
+        try:
+            d = datetime.strptime(url_date, "%Y-%m-%d")
+            if d < thirty_days_ago:
+                continue  # silent skip — old news
+        except ValueError:
+            continue
+
+        # MUST be an active IPO
         if not looks_like_active_ipo(title):
+            print(f"  SKIP (not active): {title[:80]}")
             continue
 
         company = extract_company_name(title)
@@ -192,40 +167,34 @@ def parse_news_page(html):
         else:
             ipo_type = "IPO"
 
-        # Extract date — use URL date as opening date heuristic
+        # Estimate dates
         open_date = url_date
-        # Try to estimate close date as +5 days
         close_date = ""
-        if open_date:
-            try:
-                d = datetime.strptime(open_date, "%Y-%m-%d")
-                close_date = (d + timedelta(days=4)).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-        # Extract total units from title
-        total_units = extract_units(title)
-
-        # For most retail IPOs, applicants apply for 10 kitta minimum
-        kitta = 10
+        try:
+            d = datetime.strptime(open_date, "%Y-%m-%d")
+            close_date = (d + timedelta(days=4)).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
 
         ipos.append({
             "id": f"{ipo_type.lower()}_{slugify(company)}",
             "name": company,
             "openDate": open_date,
             "closeDate": close_date,
-            "kitta": kitta,
-            "price": 100,  # default — most IPOs in Nepal at par 100
+            "kitta": 10,
+            "price": 100,
             "type": ipo_type,
             "sector": "",
             "source_url": "https://www.sharesansar.com" + url,
             "headline": title,
         })
+        print(f"  KEEP: {company} ({ipo_type}) — {open_date}")
 
     return ipos
 
 
 def merge_and_save(new_ipos):
+    """Merge with existing — REPLACE entries with same ID to update dates."""
     existing = []
     try:
         with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
@@ -236,40 +205,47 @@ def merge_and_save(new_ipos):
 
     by_id = {ipo["id"]: ipo for ipo in existing}
     added = 0
+    updated = 0
     for ipo in new_ipos:
         if ipo["id"] not in by_id:
             by_id[ipo["id"]] = ipo
             added += 1
+        else:
+            # Update if old entry has empty date but new one has date
+            old = by_id[ipo["id"]]
+            if not old.get("openDate") and ipo.get("openDate"):
+                by_id[ipo["id"]] = ipo
+                updated += 1
 
     final = {
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "source": "sharesansar.com/category/ipo-fpo-news (auto-scraped)",
+        "source": "sharesansar.com/category/ipo-fpo-news (auto-scraped, strict)",
         "ipos": list(by_id.values()),
     }
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2, ensure_ascii=False)
-    print(f"Saved {len(final['ipos'])} total IPOs ({added} new)")
+    print(f"\nSaved {len(final['ipos'])} total IPOs ({added} new, {updated} updated)")
     return added
 
 
 if __name__ == "__main__":
-    print(f"Fetching {NEWS_URL}...")
+    print(f"Fetching {NEWS_URL}...\n")
     html = fetch_html(NEWS_URL)
 
     if not html:
         print("Could not fetch — keeping existing data")
         sys.exit(0)
 
-    print(f"Got {len(html)} chars of HTML")
+    print(f"Got {len(html)} chars of HTML\n")
     ipos = parse_news_page(html)
 
     if not ipos:
-        print("No active IPOs found in news (may be a quiet week)")
+        print("\nNo active IPOs found in news (may be a quiet week)")
         sys.exit(0)
 
-    print(f"\nDetected {len(ipos)} active IPO(s):")
+    print(f"\n=== {len(ipos)} ACTIVE IPO(s) detected ===")
     for ipo in ipos:
-        print(f"  - {ipo['name']} ({ipo['type']}) opened {ipo['openDate']}")
+        print(f"  • {ipo['name']} ({ipo['type']}) — opened {ipo['openDate']}")
 
     added = merge_and_save(ipos)
     print(f"\nDone! Added {added} new IPO(s)")
