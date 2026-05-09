@@ -23,16 +23,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Selenium and Chrome
-        run: |
-          pip install selenium
-          # Chrome and chromedriver are pre-installed on ubuntu-latest runners
-
-      - name: Verify Chrome installation
-        run: |
-          google-chrome --version || true
-          which chromedriver || true
-
       - name: Run scraper
         run: python scraper.py
 
