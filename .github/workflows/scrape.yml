@@ -2,9 +2,8 @@ name: Auto-update IPO List
 
 on:
   schedule:
-    # Runs every 6 hours
     - cron: '0 */6 * * *'
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -23,6 +22,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Install Selenium and Chrome
+        run: |
+          pip install selenium
+          # Chrome and chromedriver are pre-installed on ubuntu-latest runners
+
+      - name: Verify Chrome installation
+        run: |
+          google-chrome --version || true
+          which chromedriver || true
 
       - name: Run scraper
         run: python scraper.py
