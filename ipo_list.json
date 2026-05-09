@@ -1,0 +1,35 @@
+{
+  "last_updated": "2026-05-09",
+  "ipos": [
+    {
+      "id": "ipo_nlic_2026",
+      "name": "Nepal Life Insurance Company Ltd.",
+      "openDate": "2026-05-10",
+      "closeDate": "2026-05-14",
+      "kitta": 10,
+      "price": 100,
+      "type": "IPO",
+      "sector": "Life Insurance"
+    },
+    {
+      "id": "ipo_kumari_2026",
+      "name": "Kumari Bank Ltd. (FPO)",
+      "openDate": "2026-05-12",
+      "closeDate": "2026-05-16",
+      "kitta": 10,
+      "price": 100,
+      "type": "FPO",
+      "sector": "Commercial Bank"
+    },
+    {
+      "id": "ipo_demo_2026",
+      "name": "Sample Hydropower Ltd.",
+      "openDate": "2026-05-20",
+      "closeDate": "2026-05-24",
+      "kitta": 10,
+      "price": 100,
+      "type": "IPO",
+      "sector": "Hydropower"
+    }
+  ]
+}
