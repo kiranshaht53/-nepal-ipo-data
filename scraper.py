@@ -1,6 +1,6 @@
 """
-Nepal IPO News Scraper v4 — STRICT VERSION
-Only includes IPOs with confirmed opening dates from active news.
+Nepal IPO News Scraper v5
+Robust regex - handles ShareSansar's actual HTML structure.
 """
 
 import json
@@ -35,9 +35,6 @@ def slugify(text):
     return s[:60]
 
 
-# ====== STRICT FILTERING ======
-
-# Skip these — NOT active IPOs
 SKIP_IF_FOUND = [
     "agm", "appoints", "oversubscribed",
     "concludes ipo allotment", "issue manager",
@@ -50,7 +47,6 @@ SKIP_IF_FOUND = [
     "files ipo", "submits ipo",
 ]
 
-# REQUIRE one of these — confirms the IPO is actively issuing right now
 ACTIVE_REQUIRED = [
     r"ipo for general public",
     r"issue \d+[,\d]* units? ipo shares from",
@@ -72,15 +68,20 @@ ACTIVE_REQUIRED = [
 
 def looks_like_active_ipo(headline):
     h = headline.lower()
-    # Skip noise first
     for skip in SKIP_IF_FOUND:
         if skip in h:
             return False
-    # Must match an active pattern
     for pat in ACTIVE_REQUIRED:
         if re.search(pat, h):
             return True
     return False
+
+
+def strip_tags(s):
+    s = re.sub(r"<[^>]+>", "", s)
+    s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&#039;", "'").replace("&quot;", '"')
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def extract_company_name(headline):
@@ -107,45 +108,72 @@ def extract_date_from_url(url):
     return ""
 
 
+def find_news_items(html):
+    """Find all news items - tries multiple regex patterns to be robust."""
+    items = []
+    seen_urls = set()
+
+    # Pattern 1: Find all <a> tags with /newsdetail/ href
+    # This catches both <a href="..." title="..."> AND <a title="..." href="...">
+    # Then we look at the text inside the <a> tag if title attr is missing
+    a_pattern = r'<a\s+([^>]*href\s*=\s*["\']?(/newsdetail/[^"\'>\s]+)["\']?[^>]*)>(.*?)</a>'
+    for full_attrs, url, inner in re.findall(a_pattern, html, re.DOTALL | re.IGNORECASE):
+        if url in seen_urls:
+            continue
+
+        # Try to get title from title="..." attribute
+        title_match = re.search(r'title\s*=\s*["\']([^"\']+)["\']', full_attrs, re.IGNORECASE)
+        if title_match:
+            title = title_match.group(1)
+        else:
+            # Use the link's inner text
+            title = strip_tags(inner)
+
+        if not title or len(title) < 10:
+            continue
+
+        # Skip image-only links (the photo links)
+        if title.startswith("http") or "<img" in inner.lower() and not title_match:
+            continue
+
+        seen_urls.add(url)
+        items.append((url, title.strip()))
+
+    return items
+
+
 def parse_news_page(html):
     if not html:
         return []
 
-    pattern = r'<a[^>]+href="(/newsdetail/[^"]+)"[^>]*title="([^"]+)"'
-    matches = re.findall(pattern, html, re.IGNORECASE)
-
-    seen = set()
-    items = []
-    for url, title in matches:
-        if url in seen:
-            continue
-        seen.add(url)
-        items.append((url, title))
-
+    items = find_news_items(html)
     print(f"Found {len(items)} news items on page")
 
-    # ONLY KEEP IPOs from the LAST 30 DAYS — older ones are stale/closed
+    if not items:
+        # Debug: show first 500 chars to help diagnose
+        # Look for any /newsdetail/ link at all
+        sample = re.findall(r'href\s*=\s*["\']?(/newsdetail/[^"\'>\s]+)', html)
+        print(f"Debug: found {len(sample)} /newsdetail/ links in raw HTML")
+        if sample:
+            print(f"  First link: {sample[0][:80]}")
+        return []
+
     today = datetime.now()
     thirty_days_ago = today - timedelta(days=30)
 
     ipos = []
     for url, title in items:
         url_date = extract_date_from_url(url)
-
-        # MUST have a date in the URL
         if not url_date:
-            print(f"  SKIP (no date): {title[:60]}")
             continue
 
-        # MUST be recent
         try:
             d = datetime.strptime(url_date, "%Y-%m-%d")
             if d < thirty_days_ago:
-                continue  # silent skip — old news
+                continue
         except ValueError:
             continue
 
-        # MUST be an active IPO
         if not looks_like_active_ipo(title):
             print(f"  SKIP (not active): {title[:80]}")
             continue
@@ -154,7 +182,6 @@ def parse_news_page(html):
         if not company or len(company) < 5:
             continue
 
-        # Determine type
         title_lower = title.lower()
         if "fpo" in title_lower:
             ipo_type = "FPO"
@@ -167,7 +194,6 @@ def parse_news_page(html):
         else:
             ipo_type = "IPO"
 
-        # Estimate dates
         open_date = url_date
         close_date = ""
         try:
@@ -194,7 +220,6 @@ def parse_news_page(html):
 
 
 def merge_and_save(new_ipos):
-    """Merge with existing — REPLACE entries with same ID to update dates."""
     existing = []
     try:
         with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
@@ -211,7 +236,6 @@ def merge_and_save(new_ipos):
             by_id[ipo["id"]] = ipo
             added += 1
         else:
-            # Update if old entry has empty date but new one has date
             old = by_id[ipo["id"]]
             if not old.get("openDate") and ipo.get("openDate"):
                 by_id[ipo["id"]] = ipo
@@ -219,7 +243,7 @@ def merge_and_save(new_ipos):
 
     final = {
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "source": "sharesansar.com/category/ipo-fpo-news (auto-scraped, strict)",
+        "source": "sharesansar.com/category/ipo-fpo-news (auto-scraped)",
         "ipos": list(by_id.values()),
     }
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
